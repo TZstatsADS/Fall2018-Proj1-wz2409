@@ -1,0 +1,385 @@
+---
+title: ''
+output:
+  html_document: default
+  html_notebook: default
+  pdf_document: default
+---
+
+# Happy Moments
+# What events would make people happy? Does exercise really make people happy? Does important events produce longer happiness? 
+<center>By Wanyi Zheng</center>
+
+```{r setup, include=FALSE}
+chooseCRANmirror(graphics=FALSE, ind=1)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load libraries, error=FALSE,echo=FALSE,warning=FALSE, message=FALSE}
+ packages.used=c("plotly", "tm", "tidyvers", "tidytext", "DT", "scales", "wordcloud", "gridExtra", "ngram", "plyr", "rvest", "tibble", "gplots","dplyr", "syuzhet", "factoextra", "RColorBrewer", "RANN", "topicmodels", "cluster", "gcookbook")
+ 
+# check packages that need to be installed.
+ packages.needed=setdiff(packages.used, 
+                       intersect(installed.packages()[,1], 
+                                 packages.used))
+# install additional packages
+ if(length(packages.needed)>0){
+   install.packages(packages.needed, dependencies = TRUE)}
+
+library("tm")
+library("tidyverse")
+library("tidytext")
+library("DT")
+library("scales")
+library("wordcloud")
+library("gridExtra")
+library("ngram")
+library("plyr")
+library("rvest")
+library("tibble")
+library("gplots")
+library("dplyr")
+library("syuzhet")
+library("factoextra")
+library("RColorBrewer")
+library("RANN")
+library("topicmodels")
+library("cluster") 
+library("gcookbook")
+```
+
+```{r load data,echo = FALSE, warning=FALSE, message=FALSE}
+urlfile<-'https://raw.githubusercontent.com/rit-public/HappyDB/master/happydb/data/cleaned_hm.csv'
+hm_data <- read_csv(urlfile)
+```
+
+##Part1: What kind of happy moments people have?
+First, let us look at the overview of the this happy dataset. Different poople feel happy because of different reasons. In order to find the different reasons behind the happy moments, the happy category label predicted by classifier in clean data will be used to analysis. 
+
+### Overview proportion of each happy moment category.
+```{r, echo =  FALSE, warning=FALSE, message=FALSE}
+library("plotly")
+freq <- count(hm_data, c("predicted_category", "reflection_period"))
+detach(package:plyr)
+```
+
+```{r, echo =  FALSE,warning=FALSE, message=FALSE}
+pred <- unique(freq$predicted_category)
+hrs_24 <- freq[freq$reflection_period=="24h",]$freq
+mths_3 <- freq[freq$reflection_period=="3m",]$freq
+data_f <- data.frame(pred, hrs_24, mths_3)
+
+p_f <- plot_ly(data_f, x = ~pred, y = ~hrs_24, type = 'bar', name = '24 hours') %>%
+  add_trace(y = ~mths_3, name = '3 months') %>%
+  layout(yaxis = list(title = 'Count'), barmode = 'stack')
+p_f
+```
+
+According to the plot above, achievement and affection are two main categories of happy moments. Both proportions of these two category are nearly 50%. People usually feel happy when they acheive goals and succeed in their career. People feel happy when they are be loved by others as well.
+
+###Comparing short-term period with long-term period proportions in different predicted categories.
+```{r, echo =  FALSE,warning=FALSE, message=FALSE}
+pp <- plot_ly(data_f, x = ~pred, y = ~hrs_24, type = 'bar', name = '24 hours', marker = list(color = 'rgb(49,130,189)')) %>%
+  add_trace(y = ~mths_3, name = '3 months', marker = list(color = 'rgb(204,204,204)')) %>%
+  layout(xaxis = list(title = "Predicted category", tickangle = -45),
+         yaxis = list(title = "Count"),
+         margin = list(b = 100),
+         barmode = 'group')
+pp
+```
+
+The long-term period, 3 months reflection period, has lareger proportion in achievement, affection, and bonding categories. camparing with 24 hours reflection period. On the other hand, exericis, leisure, and nature activites, make people happy more easily in the shorter period, 24 hours. People intended to remember big acheivement and special events more, other than leisure and exercise in daily life. 
+
+##Part 2: Word Cloud
+Second,let us focus on the dataset in more details. What kinds of activities in each category made people feel happy? 
+```{r text processing in tm, echo =  FALSE, warning=FALSE, message=FALSE}
+corpus <- VCorpus(VectorSource(hm_data$cleaned_hm))%>%
+  tm_map(content_transformer(tolower))%>%
+  tm_map(removePunctuation)%>%
+  tm_map(removeNumbers)%>%
+  tm_map(removeWords, character(0))%>%
+  tm_map(stripWhitespace)
+
+stemmed <- tm_map(corpus, stemDocument) %>%
+  tidy() %>%
+  select(text)
+dict <- tidy(corpus) %>%
+  select(text) %>%
+  unnest_tokens(dictionary, text)
+
+data("stop_words")
+
+word <- c("happy","ago","yesterday","lot","today","months","month",
+                 "happier","happiest","last","week","past")
+
+stop_words <- stop_words %>%
+  bind_rows(mutate(tibble(word), lexicon = "updated"))
+
+completed <- stemmed %>%
+  mutate(id = row_number()) %>%
+  unnest_tokens(stems, text) %>%
+  bind_cols(dict) %>%
+  anti_join(stop_words, by = c("dictionary" = "word"))
+
+completed <- completed %>%
+  group_by(stems) %>%
+  count(dictionary) %>%
+  mutate(word = dictionary[which.max(n)]) %>%
+  ungroup() %>%
+  select(stems, word) %>%
+  distinct() %>%
+  right_join(completed) %>%
+  select(-stems)
+
+completed <- completed %>%
+  group_by(id) %>%
+  summarise(text = str_c(word, collapse = " ")) %>%
+  ungroup()
+
+hm_data <- hm_data %>%
+  mutate(id = row_number()) %>%
+  inner_join(completed)
+```
+
+```{r, echo =  FALSE}
+wordlist=unlist(strsplit(completed$text," "))
+word.freq=table(wordlist)
+term_freq <- data.frame(term=names(word.freq),freq=as.integer(word.freq))
+```
+
+### Overall wordcloud: Friend is the most important part of happy moments.
+```{r, echo =  FALSE, warning=FALSE, message=FALSE}
+wordcloud(term_freq$term,term_freq$freq,
+          max.words=100,
+          min.freq = 1,
+          random.order=FALSE,
+          rot.per=0.2,
+          use.r.layout=T,
+          random.color=FALSE,
+          colors=brewer.pal(9,"Dark2"))
+```
+
+From the overall wordcloud, we can see that friend this the most large porportion that made people happy. "Family", "home", "birthday", "son", "husband", "job", "received", "watched", "dinner" and et, these topics correspond to the affection, acheivement, bonding, and enjoy the moment category that in the predicted categories, which have large porpotions in previous plots.  
+
+
+```{r bag of words for 24 hrs,echo =  FALSE, warning=FALSE, message=FALSE}
+bag_of_words_hr <-  hm_data[hm_data$reflection_period == "24h",] %>%
+  unnest_tokens(word, text)
+
+word_count_hr <- bag_of_words_hr %>%
+  count(word, sort = TRUE)
+```
+
+```{r,echo =  FALSE, warning=FALSE, message=FALSE}
+hm_bigrams_hr <- hm_data[hm_data$reflection_period == "24h" ,] %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2)
+
+bigram_counts_hr <- hm_bigrams_hr %>%
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  count(word1, word2, sort = TRUE)
+
+bigram_counts_hr$word <- paste(bigram_counts_hr$word1,bigram_counts_hr$word2)
+bigram_counts_hr$word2 <- NULL
+bigram_counts_hr$word1 <- NULL
+bigram_counts_hr <- bigram_counts_hr[,c("word", "n")]
+```
+
+```{r bag of words for 3 months, echo =  FALSE, warning=FALSE, message=FALSE}
+bag_of_words_m <-  hm_data[hm_data$reflection_period == "3m" ,] %>%
+  unnest_tokens(word, text)
+
+word_count_m <- bag_of_words_m %>%
+  count(word, sort = TRUE)
+```
+
+```{r, echo =  FALSE, warning=FALSE, message=FALSE}
+hm_bigrams_m <- hm_data[hm_data$reflection_period == "3m" ,] %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2)
+
+bigram_counts_m <- hm_bigrams_m %>%
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  count(word1, word2, sort = TRUE)
+
+bigram_counts_m$word <- paste(bigram_counts_m$word1,bigram_counts_m$word2)
+bigram_counts_m$word2 <- NULL
+bigram_counts_m$word1 <- NULL
+bigram_counts_m <- bigram_counts_m[,c("word", "n")]
+```
+
+### Words cloud 24 hours VS. 3 months: special happy events last longer time than daily happy moments.
+```{r, echo = FALSE, warning=FALSE, message=FALSE}
+par(mfrow=c(1,2))
+wordcloud(word_count_hr$word,word_count_hr$n,
+          scale=c(3,0.3),
+          max.words=50,
+          min.freq = 1,
+          rot.per = 0.2,
+          use.r.layout=T,
+          random.order=FALSE,
+          random.color=FALSE,
+          colors=brewer.pal(9,"Blues"))
+
+wordcloud(word_count_m$word,word_count_m$n,
+          scale=c(3,0.3),
+          max.words=50,
+          min.freq = 1,
+          rot.per = 0.2,
+          use.r.layout=T,
+          random.order=FALSE,
+          random.color=FALSE,
+          colors=brewer.pal(9,"Greens"))
+```
+
+For the single words word cloud, we can see that the three main topics of both time periods are the same as that of overal dataset, which is "Time", "Friend", and "Day". However, we can see the different when comparing the surrounding words of these two plots. "Watched", "Played", and "game" in 24 hurse period, shows that people enjoyed more in leisure activites. "Familiy", "job", "birthday" are mentioned more often. The reasons may be important events are more special and impressive rather than daily entertainments. 
+
+
+### Bigram wordcloud 24 hours VS. 3 months: there are clearer patterns that meaningful events or days make happy feeling longer.
+```{r, echo = FALSE, warning=FALSE, message=FALSE}
+par(mfrow=c(1,2))
+wordcloud(bigram_counts_hr[-1, ]$word,bigram_counts_hr[-1, ]$n,
+          max.words=30,
+          scale = c(2.3,0.3),
+          random.order=FALSE,
+          colors=brewer.pal(9,"Oranges"))
+
+wordcloud(bigram_counts_m[-1, ]$word,bigram_counts_m[-1, ]$n,
+          max.words=30,
+          scale = c(2.3,0.3),
+          random.order=FALSE,
+          colors=brewer.pal(9,"Reds"))
+```
+
+Using bigram plots, many words make more sense when combine with other words. We could clearly see that, "video game", "ice cream", and "played video" in the left plot produce happy moments within 24 hours. However, "mother day", "birthday party", "friend birthday" and other meaningful days on the right plot could be impressive and still make people happy after 3 months.  
+
+### Exercise Category: people like exercise in the morning.
+From the previous overall plots, we notice that exercise is the lowest weight category. Although exercise category has lowerest proportion of happy moments, we could see that there are still some actitivites bring people happiness, such as workout, run, and yoga. Also, we could see that people feel better exercise in the morning.
+```{r, echo = FALSE, warning=FALSE, message=FALSE}
+bag_of_words_e <-  hm_data[hm_data$predicted_category == "exercise",] %>%
+  unnest_tokens(word, text)
+
+word_count_e <- bag_of_words_e %>%
+  count(word, sort = TRUE)
+
+wordcloud(word_count_e$word, word_count_e$n,
+          max.words=100,
+          rot.per = 0.2,
+          use.r.layout=T,
+          random.order=FALSE,
+          colors=brewer.pal(9,"Dark2"))
+```
+
+## Part3: Topic Model and LDA
+```{r,echo = FALSE, warning=FALSE,echo=FALSE}
+hm.list=hm_data[2:(nrow(hm_data)-1), ]
+sent.pre=hm_data$text[1:(nrow(hm_data)-2)]
+sent.post=hm_data$text[3:(nrow(hm_data)-1)]
+hm.list$snipets=paste(sent.pre, hm.list$text, sent.post, sep=" ")
+```
+
+```{r, echo = FALSE, warning=FALSE, message=FALSE}
+docs_c <- Corpus(VectorSource(hm.list$snipets))
+hlw <- DocumentTermMatrix(docs_c)
+
+burnin_c <- 400
+iter_c <- 200
+thin_c <- 50
+seed_c <-list(2003,5,63,100001,765)
+nstart_c <- 5
+best_c <- TRUE
+# number of topics
+k_c <- 7
+# run LDA using Gibbs sampling
+ldaOut_c <-LDA(hlw, k_c, method="Gibbs", control=list(nstart=nstart_c, 
+                                                  seed = seed_c, best=best_c,
+                                                  burnin = burnin_c, iter = iter_c, 
+                                                  thin=thin_c))
+
+ldaOut.topics_c <- as.matrix(topics(ldaOut_c))
+
+# top 20 terms in each topic
+ldaOut.terms_c <- as.matrix(terms(ldaOut_c,20))
+
+# probabilities associated with each topic assignment
+topicProbabilities_c <- as.data.frame(ldaOut_c@gamma)
+
+terms.beta_c=ldaOut_c@beta
+terms.beta_c=scale(terms.beta_c)
+topics.terms_c=NULL
+for(i in 1:k_c){
+  topics.terms_c=rbind(topics.terms_c, ldaOut_c@terms[order(terms.beta_c[i,], decreasing = TRUE)[1:10]])
+}
+
+topics.terms_c
+```
+
+According to the LDA, there are 7 groups that I set.  I tag them as "Affection", "Leisure", "Earn/loss", "Enjoy_the_moment", "Acheivement", "Bonding", "Nature/Exercise". Some titles of categories that I used are different with original predicted category because I named them accoding to the pattern of the words from LDA. I combine the nature and exercise into the same group, and created a new group called earn/loss. 
+
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+topics.hash_c=c("Affection", "Leisure", "Earn/loss", "Enjoy_the_moment", "Acheivement", "Bonding", "Nature/Exercise")
+
+hm.list$ldatopic_c=as.vector(ldaOut.topics_c)
+hm.list$ldahash_c=topics.hash_c[ldaOut.topics_c]
+colnames(topicProbabilities_c)=topics.hash_c
+
+hm.list.df_c=cbind(hm.list, topicProbabilities_c)
+```
+
+### 24 hours VS. 3 months
+```{r, echo = FALSE, warning=FALSE, message=FALSE,error=FALSE}
+topic.summary_c=tbl_df(hm.list.df_c) %>%
+              select(reflection_period, "Affection":"Nature/Exercise") %>%
+              group_by(reflection_period)%>%
+              summarise_each(funs(mean))
+
+topic.summary_c=as.data.frame(topic.summary_c)
+rownames(topic.summary_c)<-topic.summary_c$reflection_period
+heatmap.2(as.matrix(topic.summary_c[,-1]), Rowv = FALSE,
+           scale = "column", key=F, 
+           col = bluered(100),
+           cexRow = 0.9, cexCol = 0.9, margins = c(8, 8), 
+           trace = "none", density.info = "none")
+```
+
+According to the headmap, red indicates higher proportion on the topics.
+When using LDA to approach these questions, leisure, enjoy the moment, and nature/exercise groups contributes to the happy moments of shoter period(24 hours). And affection, earn/loss, acheivement, and bonding are comtributes to the that of longer period (3 months). This coincides with previous approaches. Among people's happyniess moements, the actitivites such as family, friends and career are crucial, which gives people longer and larger happiness. However, small moments sum up the shorter happy daily moments. 
+
+
+### LDA clusters VS. predicted category
+```{r, echo = FALSE, warning=FALSE, message=FALSE,error=FALSE}
+topic.summary_p=tbl_df(hm.list.df_c) %>%
+              select(predicted_category, "Affection":"Nature/Exercise") %>%
+              group_by(predicted_category)%>%
+              summarise_each(funs(mean))
+
+topic.summary_p=as.data.frame(topic.summary_p)
+rownames(topic.summary_p)<-topic.summary_p$predicted_category
+heatmap.2(as.matrix(topic.summary_p[,-1]), Rowv = FALSE,
+           scale = "column", key=F, 
+           col = bluered(100),
+           cexRow = 0.9, cexCol = 0.9, margins = c(8, 8), 
+           trace = "none", density.info = "none")
+```
+
+These two methods generally gave the same results, although there are sligtly different. Natural, leisure, acheivement, enjoy the moment are matches. The old exercise category matches new Natural/Exercise. New earn/loss category also imply the a part of achievement.
+
+## Summary
+By analyzing the different between different groups of happy moments and reflection period. We could conclude the following results:
+
+1). Meaningful and important moments give people longer happiness, small moments produce daily happy moments.
+
+2). Poeple prefer to workout as exercise and prefer to exercise in the morning.
+
+3). We could groups happy moments by seven groups according to the topic modelling: "Affection", "Leisure", "Earn/loss", "Enjoy_the_moment", "Acheivement", "Bonding", "Nature/Exercise".
+
+## Reference
+1). Tutorials and Starter codes.
+
+2). Akari Asai, Sara Evensen, Behzad Golshan, Alon Halevy, Vivian Li, Andrei Lopatenko, 
+Daniela Stepanov, Yoshihiko Suhara, Wang-Chiew Tan, Yinzhan Xu, 
+``HappyDB: A Corpus of 100,000 Crowdsourced Happy Moments'', LREC '18, May 2018. (to appear)
+
+
+
+
+
